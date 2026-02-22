@@ -1,0 +1,71 @@
+import pandas as pd
+import cv2
+import matplotlib.pyplot as plt
+import os
+
+# กำหนดขนาดภาพเป็น 224x224
+IMG_SIZE = (224, 224)
+
+# --- ส่วนที่ 1: ตั้งค่า Path และโหลดข้อมูล ---
+BASE_PATH = '/content/drive/MyDrive/Colab_Notebooks/Contest_food5/'
+CSV_PATH = os.path.join(BASE_PATH, 'data_from_questionaire.csv')
+IMAGE_DIR = os.path.join(BASE_PATH, 'Questionair Images')
+
+# ฟังก์ชันเดียวที่ทั้งโหลดและ Resize
+def load_and_resize_image(img_name):
+    path = os.path.join(IMAGE_DIR, img_name)
+    if os.path.exists(path):
+        img = cv2.imread(path)
+        if img is not None:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # ปรับขนาดเป็น 224x224
+            img_resized = cv2.resize(img, IMG_SIZE, interpolation=cv2.INTER_AREA)
+            return img_resized
+    return None
+
+# โหลดไฟล์ CSV
+if os.path.exists(CSV_PATH):
+    df = pd.read_csv(CSV_PATH)
+    print(f"✅ โหลดข้อมูลสำเร็จ! พบข้อมูลทั้งหมด {len(df)} แถว")
+else:
+    print(f"ไม่พบไฟล์ CSV ที่: {CSV_PATH}")
+
+# --- ส่วนที่ 2: เลือกเลขแถวที่ต้องการดู ---
+row_index = 496 # Index ใน Python (ถ้า 200 จะแสดงเป็น Row 202 ใน Excel)
+
+if 'df' in locals():
+    if row_index < len(df):
+        row = df.iloc[row_index]
+        img1_name = row['Image 1']
+        img2_name = row['Image 2']
+        winner = row['Winner']
+        menu_name = row['Menu']
+
+        # --- ส่วนที่ 3: เรียกใช้ฟังก์ชันที่ Resize ---
+        img1 = load_and_resize_image(img1_name)
+        img2 = load_and_resize_image(img2_name)
+
+        if img1 is not None and img2 is not None:
+            fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+            
+            # แสดงรูปที่ 1 (ซ้าย)
+            axes[0].imshow(img1)
+            status1 = "[ WINNER ]" if winner == 1 else "[ LOSER ]"
+            axes[0].set_title(f"Image 1: {img1_name}\n{status1}", 
+                              color='green' if winner == 1 else 'red', fontsize=14, fontweight='bold')
+            axes[0].axis('off')
+            
+            # แสดงรูปที่ 2 (ขวา)
+            axes[1].imshow(img2)
+            status2 = "[ WINNER ]" if winner == 2 else "[ LOSER ]"
+            axes[1].set_title(f"Image 2: {img2_name}\n{status2}", 
+                              color='green' if winner == 2 else 'red', fontsize=14, fontweight='bold')
+            axes[1].axis('off')
+            
+            plt.suptitle(f"Excel Row: {row_index+2} | Category: {menu_name} | Size: {IMG_SIZE}", fontsize=18)
+            plt.tight_layout()
+            plt.show()
+        else:
+            print(f"❌ ไม่พบไฟล์รูปภาพในโฟลเดอร์")
+    else:
+        print(f"❌ ไม่พบข้อมูลใน Index ที่เลือก")
