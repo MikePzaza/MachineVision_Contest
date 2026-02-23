@@ -1,0 +1,53 @@
+import pandas as pd
+import os
+from sklearn.metrics import accuracy_score
+
+# 1. กำหนด Path
+BASE_PATH = '/content/drive/MyDrive/Colab_Notebooks/Contest_food5/'
+PREDICT_CSV = os.path.join(BASE_PATH, 'auto_match_final_results.csv')
+ACTUAL_CSV = os.path.join(BASE_PATH, 'Test Set Samples/test.csv')
+
+# 2. โหลดข้อมูล
+df_predict = pd.read_csv(PREDICT_CSV)
+df_actual = pd.read_csv(ACTUAL_CSV)
+
+# 3. เตรียมข้อมูลของจริง (เปลี่ยน 0 เป็น 1 ตามรูปที่ 1)
+df_actual['Winner_true'] = df_actual['Winner'].replace(0, 1)
+
+# 4. รวมข้อมูลเข้าด้วยกัน
+# ใช้ Image 1, 2 (จากไฟล์จริง) คู่กับ Image_A, Image_B (จากไฟล์ทาย)
+comparison_df = pd.merge(
+    df_actual,
+    df_predict[['Image_A', 'Image_B', 'Winner', 'Confidence']],
+    left_on=['Image 1', 'Image 2'],
+    right_on=['Image_A', 'Image_B'],
+    how='inner'
+)
+
+# --- จุดสำคัญที่แก้ KeyError ---
+# หลังจาก merge: 
+# คอลัมน์ Winner จาก df_actual จะกลายเป็น Winner_x
+# คอลัมน์ Winner จาก df_predict จะกลายเป็น Winner_y
+comparison_df = comparison_df.rename(columns={
+    'Winner_x': 'Winner_actual_raw',
+    'Winner_y': 'Winner_pred'
+})
+
+# 5. คำนวณความแม่นยำ
+y_true = comparison_df['Winner_true']
+y_pred = comparison_df['Winner_pred'] 
+
+accuracy = accuracy_score(y_true, y_pred)
+
+# 6. แสดงผลลัพธ์
+print(f"{'='*45}")
+print(f"📊 สรุปผลการทดสอบโมเดล (Test Set)")
+print(f"ความแม่นยำ (Accuracy): {accuracy * 100:.2f} %")
+print(f"{'='*45}")
+
+# ตรวจสอบความถูกต้องรายคู่
+comparison_df['Match'] = (comparison_df['Winner_true'] == comparison_df['Winner_pred']).apply(lambda x: '✅ ถูก' if x else '❌ ผิด')
+
+# เลือกคอลัมน์มาโชว์ให้ดูง่ายๆ
+display_cols = ['Image 1', 'Image 2', 'Winner_true', 'Winner_pred', 'Match', 'Confidence']
+display(comparison_df[display_cols].head(10))
