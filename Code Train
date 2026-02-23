@@ -1,0 +1,130 @@
+import tensorflow as tf
+from tensorflow.keras import Model, Input
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Subtract, Activation, Dropout, BatchNormalization
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+import pandas as pd
+import os
+from google.colab import drive
+
+# --- 1. เชื่อมต่อ Google Drive และตั้งค่า Path ---
+if not os.path.exists('/content/drive'):
+    drive.mount('/content/drive')
+
+# ปรับ Path ตามโฟลเดอร์ของคุณ
+BASE_PATH = '/content/drive/MyDrive/Colab_Notebooks/Contest_food5/'
+CSV_PATH = os.path.join(BASE_PATH, 'data_from_questionaire.csv')
+IMAGE_DIR = os.path.join(BASE_PATH, 'Questionair Images')
+
+IMAGE_SIZE = (128, 128)
+BATCH_SIZE = 32
+MAX_EPOCH = 50
+
+# --- 2. สร้างโครงสร้างโมเดล Siamese RankNet ---
+def build_siamese_model():
+    # ส่วนสกัดคุณลักษณะ (Shared Weights Encoder)
+    input_node = Input(shape=(IMAGE_SIZE[0], IMAGE_SIZE[1], 3))
+
+    # Block 1
+    x = Conv2D(32, (3, 3), activation='relu', padding='same')(input_node)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2, 2))(x)
+
+    # Block 2
+    x = Conv2D(64, (3, 3), activation='relu', padding='same')(x)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2, 2))(x)
+
+    # Block 3
+    x = Conv2D(128, (3, 3), activation='relu', padding='same')(x)
+    x = BatchNormalization()(x)
+    x = MaxPooling2D((2, 2))(x)
+
+    x = Flatten()(x)
+
+    # Dense Layer พร้อม Dropout เพื่อป้องกัน Overfitting
+    x = Dense(64, activation='relu')(x)
+    x = Dropout(0.5)(x) # สุ่มปิด Neuron 50% เพื่อให้โมเดลไม่จำภาพจนเกินไป
+
+    score = Dense(1, name="Aesthetic_Score")(x)
+
+    # สร้างโมเดลย่อยสำหรับให้คะแนนภาพเดียว
+    encoder = Model(inputs=input_node, outputs=score, name="Encoder")
+
+    # ส่วน Siamese: รับภาพคู่ (A และ B)
+    img_a = Input(shape=(IMAGE_SIZE[0], IMAGE_SIZE[1], 3), name="Input_Img_1")
+    img_b = Input(shape=(IMAGE_SIZE[0], IMAGE_SIZE[1], 3), name="Input_Img_2")
+
+    s1 = encoder(img_a)
+    s2 = encoder(img_b)
+
+    # นำคะแนนมาลบกัน (s2 - s1)
+    # ถ้าภาพ 2 ชนะ (Winner=2) ผลลัพธ์จากการลบจะเป็นบวก -> Sigmoid เข้าใกล้ 1.0
+    diff = Subtract()([s2, s1])
+    output = Activation('sigmoid')(diff)
+
+    model = Model(inputs=[img_a, img_b], outputs=output)
+
+    # ใช้ Learning Rate ต่ำเพื่อให้โมเดลเรียนรู้ความสวยงามที่ละเอียดอ่อนได้ดีขึ้น
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0001)
+    model.compile(optimizer=optimizer, loss='binary_crossentropy', metrics=['accuracy'])
+
+    return model
+
+# --- 3. ตัวสร้างข้อมูล (Data Generator พร้อม Augmentation) ---
+def food_pair_generator(df_path, img_dir, batch_size):
+    df = pd.read_csv(df_path)
+
+    # Data Augmentation: สุ่มบิดภาพและปรับแสง เพื่อให้โมเดลเรียนรู้ฟีเจอร์จริงไม่ใช่การจดจำพิกเซล
+    datagen = ImageDataGenerator(
+        rescale=1./255,
+        rotation_range=20,
+        width_shift_range=0.1,
+        height_shift_range=0.1,
+        brightness_range=[0.8, 1.2],
+        horizontal_flip=True,
+        fill_mode='nearest'
+    )
+
+    # สร้าง Generator แยก 2 ตัวแต่ใช้ Seed เดียวกันเพื่อให้ข้อมูลสัมพันธ์กัน
+    gen1 = datagen.flow_from_dataframe(dataframe=df, directory=img_dir, x_col='Image 1',
+        class_mode=None, target_size=IMAGE_SIZE, batch_size=batch_size, shuffle=False, seed=42)
+    gen2 = datagen.flow_from_dataframe(dataframe=df, directory=img_dir, x_col='Image 2',
+        class_mode=None, target_size=IMAGE_SIZE, batch_size=batch_size, shuffle=False, seed=42)
+
+    # กำหนด Label: ถ้า Winner ใน CSV คือ 2 ให้เป็น 1.0 (Positive Class)
+    labels = (df['Winner'] == 2).astype(float).values
+
+    i = 0
+    while True:
+        batch_x1, batch_x2 = next(gen1), next(gen2)
+        idx_start = i * batch_size
+        idx_end = idx_start + len(batch_x1)
+        batch_y = labels[idx_start:idx_end]
+
+        i = 0 if (i + 1) >= len(gen1) else i + 1
+
+        # ส่งค่าเป็น Tuple ( ) เพื่อป้องกัน TypeError ใน TF เวอร์ชันใหม่
+        yield (batch_x1, batch_x2), batch_y
+
+# --- 4. เริ่มต้นการฝึกฝน (Training) ---
+siamese_model = build_siamese_model()
+df_total = pd.read_csv(CSV_PATH)
+steps = len(df_total) // BATCH_SIZE
+
+# บันทึกโมเดลที่ดีที่สุด (Accuracy สูงสุด)
+checkpoint = ModelCheckpoint(os.path.join(BASE_PATH, 'best_food_rankerv3.keras'),
+                             monitor='accuracy', save_best_only=True, verbose=1)
+
+# หยุดเทรนอัตโนมัติหาก Accuracy ไม่พัฒนาแล้ว (ป้องกันการเทรนเสียเปล่า)
+early_stop = EarlyStopping(monitor='accuracy', patience=10, restore_best_weights=True)
+
+print(f"🔄 กำลังเริ่มเทรนโมเดลด้วยข้อมูล {len(df_total)} คู่...")
+history = siamese_model.fit(
+    food_pair_generator(CSV_PATH, IMAGE_DIR, BATCH_SIZE),
+    steps_per_epoch=steps,
+    epochs=MAX_EPOCH,
+    callbacks=[checkpoint, early_stop]
+)
+
+print("การเทรนเสร็จสิ้น! ไฟล์โมเดลถูกบันทึกที่ Google Drive ของคุณเรียบร้อยแล้ว")
